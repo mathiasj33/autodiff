@@ -31,9 +31,6 @@ class Tensor:
     def reset_grad(self):
         self._grad = 0
 
-    def is_vector(self):
-        return 1 in self.data.shape
-
     @property
     def shape(self):
         return self.data.shape
@@ -148,6 +145,31 @@ class Tensor:
         self.data *= Tensor.as_tensor(other).to_numpy()
         return self
 
+    def __truediv__(self, other):
+        other = Tensor.as_tensor(other)
+        if not context.compute_grads:
+            return Tensor(self.data / other.data, track_grad=False)
+
+        out = Tensor(self.data / other.data, [self, other], '/', track_grad=self.track_grad or other.track_grad)
+
+        def backward():
+            if self.track_grad:
+                self.add_grad(out._grad / other.data)
+            if other.track_grad:
+                other.add_grad(-out._grad * self.data / other.data ** 2)
+
+        out.backward_op = backward
+        return out
+
+    def __rtruediv__(self, other):
+        return Tensor.as_tensor(other) / self
+
+    def __itruediv__(self, other):
+        if context.compute_grads and self.track_grad:
+            raise ValueError('In place operation on tensor with tracked gradient')
+        self.data /= Tensor.as_tensor(other).to_numpy()
+        return self
+
     def __matmul__(self, other):
         other = Tensor.as_tensor(other)
         if not context.compute_grads:
@@ -238,15 +260,32 @@ class Tensor:
         out.backward_op = backward
         return out
 
+    def sqrt(self):
+        if not context.compute_grads:
+            return Tensor(np.sqrt(self.data), track_grad=False)
+
+        out = Tensor(np.sqrt(self.data), [self], 'sqrt', track_grad=self.track_grad)
+
+        def backward():
+            self.add_grad(out._grad / (2 * np.sqrt(self.data)))
+
+        out.backward_op = backward
+        return out
+
     def __getitem__(self, item):
-        assert self.is_vector() and isinstance(item, int)
+        if isinstance(item, Tensor):
+            item = item.data
         if not context.compute_grads:
             return Tensor(self.data[item], track_grad=False)
 
         out = Tensor(self.data[item], [self], f'[{item}]', track_grad=self.track_grad)
 
         def backward():
-            self._grad[[item]] += self.handle_broadcasting(out._grad)
+            if isinstance(self._grad, int):
+                self._grad = np.zeros_like(self.data, dtype=np.float32)
+            shape = self._grad[item].shape
+            np.add.at(self._grad, item, out._grad.reshape(shape))
+            # self._grad[item] += out._grad.reshape(shape)
 
         out.backward_op = backward
         return out
@@ -289,8 +328,20 @@ class Tensor:
         out.backward_op = backward
         return out
 
+    def expand(self, *sizes):
+        if not context.compute_grads:
+            return Tensor(np.broadcast_to(self.data, *sizes), track_grad=False)
+
+        out = Tensor(np.broadcast_to(self.data, *sizes), [self], 'expand', track_grad=self.track_grad)
+
+        def backward():
+            self.add_grad(out._grad)
+
+        out.backward_op = backward
+        return out
+
     def gather(self, axis, index):
-        index = index.data  # don't backpropagate wrt index
+        index = Tensor.as_tensor(index).data  # don't backpropagate wrt index
         if not context.compute_grads:
             return Tensor(np.take_along_axis(self.data, index, axis), track_grad=False)
 
@@ -300,6 +351,26 @@ class Tensor:
             values = np.take_along_axis(self._grad, index, axis)
             assert out._grad.shape == values.shape
             np.put_along_axis(self._grad, index, values + out._grad, axis)
+
+        out.backward_op = backward
+        return out
+
+    def scatter_add(self, index, src):
+        index = Tensor.as_tensor(index).data
+        src_data = Tensor.as_tensor(src).data
+        result = self.data.copy()
+        # Unfortunately, the following is very slow. Numpy doesn't provide native scatter_add like functionality.
+        np.add.at(result, index, src_data)
+        if not context.compute_grads:
+            return Tensor(result, track_grad=False)
+
+        out = Tensor(result, [self, src], 'scatter_add', track_grad=self.track_grad)
+
+        def backward():
+            if self.track_grad:
+                self.add_grad(out._grad)
+            if isinstance(src, Tensor) and src.track_grad:
+                src.add_grad(out._grad[index])
 
         out.backward_op = backward
         return out

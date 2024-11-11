@@ -24,3 +24,7 @@ def exp(t):
 
 def log(t):
     return t.log()
+
+
+def sqrt(t):
+    return t.sqrt()

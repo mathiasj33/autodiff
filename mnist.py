@@ -29,9 +29,9 @@ class MnistNetwork:
         return Tensor(np.random.normal(0, np.sqrt(2 / n_in), (n_in, n_out)).astype(np.float32))
 
     def __call__(self, x):
-        h1 = relu(x @ self.w1 + self.b1)
-        h2 = relu(h1 @ self.w2 + self.b2)
-        return h2 @ self.w3 + self.b3
+        h1 = relu(x @ self.w1 + self.b1)   # (B, H1)
+        h2 = relu(h1 @ self.w2 + self.b2)  # (B, H2)
+        return h2 @ self.w3 + self.b3      # (B, 10)
 
     def parameters(self):
         return [self.w1, self.b1, self.w2, self.b2, self.w3, self.b3]
@@ -57,8 +57,8 @@ def train(model, data, num_epochs):
     val_losses = []
     val_accs = []
     iterations = []
-    # optimizer = SGD(model.parameters(), lr=0.2)
-    optimizer = Momentum(model.parameters(), lr=5e-2, gamma=0.9)
+    optimizer = SGD(model.parameters(), lr=0.2)
+    # optimizer = Momentum(model.parameters(), lr=5e-2, gamma=0.9)
     loss_fn = lambda preds, y: cross_entropy_l2(model, preds, y, reg=5e-4)
     pbar = trange(num_epochs, desc='Epoch', ncols=120)
 
